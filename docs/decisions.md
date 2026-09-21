@@ -19,10 +19,30 @@ notes is that everyone knows *why* it blocks there and how to change it.
 
 ## 2. Security scanning: CRITICAL/HIGH block, lower severities report
 
-- OSV on the lockfile + Trivy on the built image, both `exit-code: 1`.
+- **PRs block only on *new* vulnerable dependencies** (dependency-review-action):
+  the pre-existing CVE backlog belongs to main's weekly full scan, not to
+  whoever happens to open a PR today. Punishing PR authors for inherited debt
+  is the fastest way to get the gate disabled.
+- Full OSV scan of the lockfile on main + weekly schedule (new CVEs arrive
+  without any code change), blocking.
+- Trivy on the image **and** the k8s manifests, `exit-code: 1` on CRITICAL/HIGH.
 - `ignore-unfixed: true`: blocking on vulnerabilities with no available fix
   only trains people to bypass the gate. Unfixed CVEs stay visible in reports.
-- Weekly scheduled rescan, because new CVEs arrive without any code change.
+- Accepted risks go to `.trivyignore` — every entry with a reason, an owner
+  and a review date. An ignore without an expiry is a permanent hole.
+- Secrets (gitleaks over full history) and SAST (CodeQL) run on every PR;
+  CodeQL blocking is configured via Ruleset ("Require code scanning results")
+  so alert triage stays in the security tab.
+
+## 2b. Deploy → smoke → rollback as one reusable workflow
+
+- `_deploy-env.yml` is `workflow_call`-only: staging and production run the
+  *same* deploy code, differing only in inputs. Divergent per-env scripts are
+  where promotion bugs live.
+- GitOps style: deploy = commit bumping the image tag, Argo CD applies it;
+  rollback = the same commit in reverse, automatic when smoke fails after a
+  successful deploy. The run still ends red — auto-rollback repairs prod,
+  it must not hide the failure.
 
 ## 3. Post-deploy smoke tests: few, fast, business-shaped
 

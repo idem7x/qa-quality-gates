@@ -15,8 +15,9 @@ money.
 | Capability | Gate behavior | Files |
 |---|---|---|
 | **Blocking test coverage** | CI job fails below 90% lines / 85% branches — enforced via required status checks, not a dashboard | [`vitest.config.ts`](vitest.config.ts), [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
-| **Security scanning as a gate** | OSV (lockfile) + Trivy (image) exit non-zero on CRITICAL/HIGH; weekly rescan for new CVEs | [`.github/workflows/security.yml`](.github/workflows/security.yml), [`Dockerfile`](Dockerfile) |
+| **Security scanning as a gate** | PRs: only *newly introduced* vulnerable deps block (dependency-review); main + weekly: full OSV scan; Trivy on image and k8s manifests (CRITICAL/HIGH, accepted risks in `.trivyignore`); gitleaks + CodeQL | [`.github/workflows/security.yml`](.github/workflows/security.yml), [`.trivyignore`](.trivyignore), [`Dockerfile`](Dockerfile) |
 | **Post-deploy smoke tests** | 4 fast business-shaped checks (incl. a real fare computation and an idempotency replay); exit code = promotion criterion | [`smoke/smoke.mjs`](smoke/smoke.mjs), [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), [`k8s/deployment.yaml`](k8s/deployment.yaml) |
+| **Deploy → smoke → rollback, reusable** | One workflow for staging and production (GitOps + Argo CD): smoke failure auto-restores the previous image tag | [`.github/workflows/_deploy-env.yml`](.github/workflows/_deploy-env.yml) |
 | **AI: first-pass PR review** | Claude comments on money-handling / idempotency / test gaps; advisory only, humans keep merge authority | [`.github/workflows/ai-pr-review.yml`](.github/workflows/ai-pr-review.yml) |
 | **AI: test generation** | Finds the worst-covered file from the coverage report, proposes tests to a gitignored folder — a human reviews and commits | [`scripts/ai-test-gen.mjs`](scripts/ai-test-gen.mjs) |
 | **AI: CI failure triage** | Classifies failed runs (real bug / flaky / infra) and comments the probable cause on the PR | [`scripts/ai-ci-triage.mjs`](scripts/ai-ci-triage.mjs), [`.github/workflows/ci-failure-triage.yml`](.github/workflows/ci-failure-triage.yml) |

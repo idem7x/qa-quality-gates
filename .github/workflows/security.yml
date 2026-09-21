@@ -1,7 +1,13 @@
-# Security gate: dependency vulnerabilities and container image CVEs block the
-# pipeline (exit-code 1), they are not just uploaded to a dashboard.
-# Policy: CRITICAL/HIGH block; lower severities are visible but do not block —
-# a gate that cries wolf on every LOW gets bypassed within a month.
+# Security gates. Blocking policy per check:
+#   - PRs: only NEW vulnerable dependencies block (dependency-review) — the
+#     pre-existing CVE backlog belongs to main's weekly scan, not to whoever
+#     happens to open a PR today.
+#   - main + weekly: full OSV scan of the lockfile (new CVEs arrive without
+#     code changes), blocking.
+#   - Image: Trivy blocks on CRITICAL/HIGH with an available fix; accepted
+#     risks live in .trivyignore with an owner and a review date.
+#   - Secrets (gitleaks) and SAST (CodeQL) run everywhere.
+# A gate that cries wolf on every LOW gets bypassed within a month.
 name: Security
 
 on:
@@ -11,11 +17,31 @@ on:
   schedule:
     - cron: '0 6 * * 1' # weekly rescan: new CVEs appear without code changes
 
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
+  # PR gate: blocks only vulnerabilities introduced BY this PR.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  # Full scan of everything in the lockfile — main and weekly schedule.
   dependency-scan:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,16 +50,50 @@ jobs:
         with:
           scan-args: --lockfile=package-lock.json
 
+  # Leaked credentials in the code and its history.
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans history, not just the tip
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # SAST. CodeQL does not fail the build by itself: blocking is configured in
+  # Ruleset → "Require code scanning results" (severity high+), so triage of
+  # alerts stays in the security tab instead of a red X with no context.
+  sast:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3
+
   image-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build image
         run: docker build -t fare-service:${{ github.sha }} .
-      - name: Trivy image scan (blocking on CRITICAL/HIGH)
+      - name: Trivy image scan (blocking on fixable CRITICAL/HIGH)
         uses: aquasecurity/trivy-action@0.29.0
         with:
           image-ref: fare-service:${{ github.sha }}
           severity: CRITICAL,HIGH
           exit-code: '1'
           ignore-unfixed: true
+          trivyignores: .trivyignore
+      - name: K8s manifests scan (Trivy config)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: config
+          scan-ref: ./k8s
+          severity: CRITICAL,HIGH
+          exit-code: '1'

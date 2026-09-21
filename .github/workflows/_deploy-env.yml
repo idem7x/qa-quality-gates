@@ -1,0 +1,90 @@
+# Reusable workflow: deploy → smoke → rollback on failure.
+# The same code path for staging and production — the only differences are
+# inputs. GitOps flavor: the deploy is a commit bumping the image tag, Argo CD
+# applies it, and rollback is the same commit in reverse.
+# Called from deploy.yml; only runs when GitOps secrets are configured.
+name: _deploy-env
+
+on:
+  workflow_call:
+    inputs:
+      environment: { type: string, required: true }
+      tag: { type: string, required: true }
+      base_url: { type: string, required: true }
+
+env:
+  SERVICE: fare-service
+  VALUES_FILE: apps/fare-service/${{ inputs.environment }}/values.yaml
+  ARGO_APP: fare-service-${{ inputs.environment }}
+
+jobs:
+  deploy:
+    name: Deploy → ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.base_url }}
+    outputs:
+      previous_tag: ${{ steps.prev.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: acme/gitops # separate GitOps repo
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - id: prev # remember the current tag for rollback
+        run: echo "tag=$(yq '.image.tag' "$VALUES_FILE")" >> "$GITHUB_OUTPUT"
+
+      - name: Bump image tag (GitOps commit)
+        run: |
+          yq -i '.image.tag = "${{ inputs.tag }}"' "$VALUES_FILE"
+          git config user.name  "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git commit -am "deploy($SERVICE): ${{ inputs.environment }} → ${{ inputs.tag }}"
+          git push
+
+      - name: Wait for Argo CD sync + healthy rollout
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+        run: |
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          ./argocd app wait "$ARGO_APP" --sync --health --timeout 600 --grpc-web
+
+  # Post-deploy smoke: the promotion criterion.
+  smoke:
+    name: Smoke → ${{ inputs.environment }}
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # smoke must be fast, or humans will skip it under pressure
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run smoke suite (blocking)
+        run: BASE_URL=${{ inputs.base_url }} node smoke/smoke.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Rollback: deploy succeeded but smoke failed → restore the previous tag.
+  rollback:
+    name: Rollback → ${{ inputs.environment }}
+    needs: [deploy, smoke]
+    if: failure() && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: acme/gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+      - name: Restore previous tag
+        run: |
+          yq -i '.image.tag = "${{ needs.deploy.outputs.previous_tag }}"' "$VALUES_FILE"
+          git config user.name  "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git commit -am "rollback($SERVICE): ${{ inputs.environment }} → ${{ needs.deploy.outputs.previous_tag }}"
+          git push
+      - name: Fail the run explicitly
+        run: |
+          echo "::error::Smoke failed on ${{ inputs.environment }}, rolled back to ${{ needs.deploy.outputs.previous_tag }}"
+          exit 1
