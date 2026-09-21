@@ -1,0 +1,26 @@
+{
+  "name": "qa-quality-gates",
+  "version": "1.0.0",
+  "description": "Minimal, working examples of blocking quality gates for a Node.js/TypeScript delivery pipeline: coverage gates, security scanning, AI-assisted QA, post-deploy smoke tests and DORA metrics.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "start": "node --experimental-strip-types src/server.ts",
+    "smoke": "node smoke/smoke.mjs",
+    "ai:test-gen": "node scripts/ai-test-gen.mjs",
+    "ai:triage": "node scripts/ai-ci-triage.mjs",
+    "dora": "node scripts/dora-metrics.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^3.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

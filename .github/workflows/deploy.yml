@@ -1,0 +1,46 @@
+# Deploy with post-deploy smoke tests as the promotion criterion.
+# In this demo the "environment" is a container started in the job; in a real
+# cluster the deploy step becomes kubectl/helm/ArgoCD sync and BASE_URL points
+# at the staging ingress — the gate logic is identical: smoke fails => the
+# release is not promoted (and the job's red X is the visible signal).
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t fare-service:${{ github.sha }} .
+
+      - name: Deploy (demo: run the container)
+        run: |
+          docker run -d --name fare-service -p 3000:3000 \
+            -e APP_VERSION=${{ github.sha }} \
+            fare-service:${{ github.sha }}
+          # wait for readiness, bounded
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3000/ready && break
+            sleep 1
+          done
+
+      - name: Post-deploy smoke tests (blocking)
+        run: BASE_URL=http://localhost:3000 node smoke/smoke.mjs
+
+      - name: Verify deployed version matches the release
+        run: |
+          DEPLOYED=$(curl -fsS http://localhost:3000/ready | node -e 'process.stdin.on("data",d=>console.log(JSON.parse(d).version))')
+          test "$DEPLOYED" = "${{ github.sha }}" || { echo "version mismatch: $DEPLOYED"; exit 1; }
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs fare-service

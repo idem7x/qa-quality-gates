@@ -1,0 +1,76 @@
+# Minimal Kubernetes deployment showing where the same gates live in-cluster:
+# readiness gates traffic, liveness restarts wedged pods, and the smoke test
+# (smoke/smoke.mjs pointed at the Service) runs as the promotion check after
+# each rollout — e.g. as an Argo Rollouts analysis step or a plain Job.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fare-service
+  labels:
+    app: fare-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fare-service
+  template:
+    metadata:
+      labels:
+        app: fare-service
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: fare-service
+          image: fare-service:latest # pinned by digest in a real pipeline
+          ports:
+            - containerPort: 3000
+          env:
+            - name: APP_VERSION
+              value: 'set-by-ci'
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fare-service
+spec:
+  selector:
+    app: fare-service
+  ports:
+    - port: 80
+      targetPort: 3000
+---
+# Post-rollout smoke test as an in-cluster Job: exit code = promotion signal.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fare-service-smoke
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: smoke
+          image: fare-service:latest
+          command: ['node', 'smoke/smoke.mjs']
+          env:
+            - name: BASE_URL
+              value: 'http://fare-service'

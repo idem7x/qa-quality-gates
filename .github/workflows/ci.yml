@@ -1,0 +1,51 @@
+# PR gate: nothing merges unless typecheck and tests pass AND coverage stays
+# above the thresholds in vitest.config.ts. The coverage step *fails the job* —
+# it does not just report a number nobody reads.
+# Enforce it by adding these jobs as required status checks in branch protection.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  test-with-coverage-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Blocking: vitest exits non-zero if lines<90 / branches<85 / functions<90.
+      - run: npm run test:coverage
+      - name: Coverage summary to job summary
+        if: always()
+        run: |
+          echo "### Coverage" >> "$GITHUB_STEP_SUMMARY"
+          node -e '
+            const s = require("./coverage/coverage-summary.json").total;
+            for (const k of ["lines","branches","functions","statements"])
+              console.log(`- ${k}: ${s[k].pct}%`);
+          ' >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/

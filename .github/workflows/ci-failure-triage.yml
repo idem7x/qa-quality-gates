@@ -1,0 +1,49 @@
+# When CI fails, run an AI first-pass triage over the failed job's log and
+# publish the classification (real bug / flaky / infra) to the run summary and,
+# if the run belongs to a PR, as a PR comment. Saves the "stare at 3000 log
+# lines" step; the human still decides what to do.
+name: CI failure triage
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+jobs:
+  triage:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download failed job logs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/logs" > logs.zip
+          mkdir -p logs && unzip -o logs.zip -d logs
+          cat logs/*/*.txt logs/*.txt 2>/dev/null | tail -c 200000 > failed.log
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: AI triage
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          node scripts/ai-ci-triage.mjs failed.log | tee triage.md
+          cat triage.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on the PR (if any)
+        if: github.event.workflow_run.pull_requests[0] != null
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: gh pr comment "$PR" --repo "${{ github.repository }}" --body-file triage.md

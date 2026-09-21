@@ -1,0 +1,26 @@
+# Weekly DORA report computed from data the pipeline already has
+# (deploy workflow runs + commit timestamps). Published to the run summary —
+# in a real org this would also land in Datadog/Slack.
+name: DORA metrics
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Compute DORA metrics
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/dora-metrics.mjs | tee -a "$GITHUB_STEP_SUMMARY"

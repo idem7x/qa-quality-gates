@@ -1,0 +1,39 @@
+# Security gate: dependency vulnerabilities and container image CVEs block the
+# pipeline (exit-code 1), they are not just uploaded to a dashboard.
+# Policy: CRITICAL/HIGH block; lower severities are visible but do not block —
+# a gate that cries wolf on every LOW gets bypassed within a month.
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1' # weekly rescan: new CVEs appear without code changes
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: OSV scan of lockfile (blocking)
+        uses: google/osv-scanner-action/osv-scanner-action@v2.0.3
+        with:
+          scan-args: --lockfile=package-lock.json
+
+  image-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t fare-service:${{ github.sha }} .
+      - name: Trivy image scan (blocking on CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: fare-service:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true

@@ -1,0 +1,42 @@
+# AI first-pass PR review. Advisory by design: it comments, it does not
+# approve, request changes or block. Human review remains the merge authority —
+# the AI's job is to catch the mechanical 60% early (edge cases, missing tests,
+# money-handling smells) so humans spend their attention on design.
+# Skips silently when the ANTHROPIC_API_KEY secret is absent (e.g. forks).
+name: AI PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  first-pass-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for API key
+        id: key
+        run: echo "present=${{ secrets.ANTHROPIC_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Claude first-pass review
+        if: steps.key.outputs.present == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this PR as a first-pass QA reviewer for a fintech fare/refund service.
+            Prioritize, in order:
+            1. Money handling: float arithmetic, rounding, currency mixing.
+            2. Idempotency and double-processing risks.
+            3. Missing or weakened tests; changes that lower coverage of critical paths.
+            4. Error paths that swallow failures.
+            Post at most 5 comments, each with file/line and a concrete suggestion.
+            If the PR looks fine, say so briefly — do not invent findings.
